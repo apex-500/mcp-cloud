@@ -17,7 +17,7 @@ Hosted MCP server platform. Connect AI agents to powerful tools via a simple RES
 Contact the admin or use the admin API to create a key:
 
 ```bash
-curl -X POST https://your-server.com/v1/keys/create \
+curl -X POST https://mcp-cloud-2w62.onrender.com/v1/keys/create \
   -H "Authorization: Bearer YOUR_ADMIN_KEY" \
   -H "Content-Type: application/json" \
   -d '{"email": "user@example.com", "tier": "free"}'
@@ -26,7 +26,7 @@ curl -X POST https://your-server.com/v1/keys/create \
 ### 2. Make Your First Call
 
 ```bash
-curl -X POST https://your-server.com/v1/tools/crypto_price \
+curl -X POST https://mcp-cloud-2w62.onrender.com/v1/tools/crypto_price \
   -H "Authorization: Bearer mcp_live_YOUR_KEY" \
   -H "Content-Type: application/json" \
   -d '{"symbol": "bitcoin"}'
@@ -35,7 +35,7 @@ curl -X POST https://your-server.com/v1/tools/crypto_price \
 ### 3. Check Usage
 
 ```bash
-curl https://your-server.com/v1/usage \
+curl https://mcp-cloud-2w62.onrender.com/v1/usage \
   -H "Authorization: Bearer mcp_live_YOUR_KEY"
 ```
 
@@ -96,7 +96,7 @@ Connect Claude Desktop or any MCP client to the remote SSE endpoint:
     "mcp-cloud": {
       "transport": {
         "type": "sse",
-        "url": "https://your-server.com/sse"
+        "url": "https://mcp-cloud-2w62.onrender.com/sse"
       }
     }
   }

@@ -11,6 +11,7 @@ import csv
 import io
 import json
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Awaitable
 
@@ -81,10 +82,36 @@ async def _get_http_client() -> httpx.AsyncClient:
     return _http_client
 
 
+# -- Simple in-memory cache for CoinGecko rate-limit avoidance --------------
+
+_cache: dict[str, tuple[float, Any]] = {}  # key -> (expiry_ts, value)
+_CACHE_TTL = 60  # seconds
+
+
+def _cache_get(key: str) -> Any | None:
+    """Return cached value if present and not expired, else None."""
+    entry = _cache.get(key)
+    if entry is None:
+        return None
+    expiry, value = entry
+    if time.monotonic() > expiry:
+        del _cache[key]
+        return None
+    return value
+
+
+def _cache_set(key: str, value: Any) -> None:
+    _cache[key] = (time.monotonic() + _CACHE_TTL, value)
+
+
 # -- Crypto tools -----------------------------------------------------------
 
 async def crypto_price(symbol: str, currency: str = "usd") -> dict:
     """Get current price for a cryptocurrency."""
+    cache_key = f"crypto_price:{symbol.lower()}:{currency.lower()}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
     client = await _get_http_client()
     url = "https://api.coingecko.com/api/v3/simple/price"
     params = {"ids": symbol.lower(), "vs_currencies": currency.lower()}
@@ -93,15 +120,22 @@ async def crypto_price(symbol: str, currency: str = "usd") -> dict:
     data = resp.json()
     if symbol.lower() not in data:
         return {"error": f"Unknown symbol: {symbol}"}
-    return {
+    result = {
         "symbol": symbol,
         "currency": currency,
         "price": data[symbol.lower()][currency.lower()],
     }
+    _cache_set(cache_key, result)
+    return result
 
 
 async def crypto_prices_batch(symbols: list[str], currency: str = "usd") -> dict:
     """Get prices for multiple cryptocurrencies at once."""
+    sorted_ids = sorted(s.lower() for s in symbols)
+    cache_key = f"crypto_batch:{','.join(sorted_ids)}:{currency.lower()}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
     client = await _get_http_client()
     ids = ",".join(s.lower() for s in symbols)
     url = "https://api.coingecko.com/api/v3/simple/price"
@@ -116,11 +150,17 @@ async def crypto_prices_batch(symbols: list[str], currency: str = "usd") -> dict
             results[s] = {"currency": currency, "price": data[key][currency.lower()]}
         else:
             results[s] = {"error": f"Unknown symbol: {s}"}
-    return {"prices": results}
+    result = {"prices": results}
+    _cache_set(cache_key, result)
+    return result
 
 
 async def trending_tokens() -> dict:
     """Get trending cryptocurrency tokens from CoinGecko."""
+    cache_key = "trending_tokens"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
     client = await _get_http_client()
     url = "https://api.coingecko.com/api/v3/search/trending"
     resp = await client.get(url)
@@ -135,7 +175,9 @@ async def trending_tokens() -> dict:
             "market_cap_rank": coin.get("market_cap_rank"),
             "price_btc": coin.get("price_btc"),
         })
-    return {"trending": coins}
+    result = {"trending": coins}
+    _cache_set(cache_key, result)
+    return result
 
 
 # -- API health tools -------------------------------------------------------
