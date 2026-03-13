@@ -1,8 +1,8 @@
 """
 API key management for MCP Cloud.
 
-Keys are stored in a local JSON file for simplicity.
-In production, swap this out for a database backend.
+Uses PostgreSQL when DATABASE_URL is set, otherwise falls back to
+local JSON file storage for development.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .db import is_pg_enabled, get_conn
 from .pricing import TIERS, get_tier
 
 logger = logging.getLogger("mcp_cloud.auth")
@@ -33,6 +34,10 @@ def _generate_key(prefix: str = _KEY_PREFIX) -> str:
     return f"{prefix}{random_part}"
 
 
+# --------------------------------------------------------------------------- #
+# JSON file helpers (fallback)
+# --------------------------------------------------------------------------- #
+
 def _load_keys() -> dict[str, dict[str, Any]]:
     if not KEYS_FILE.exists():
         return {}
@@ -45,6 +50,10 @@ def _save_keys(keys: dict[str, dict[str, Any]]) -> None:
     with open(KEYS_FILE, "w") as f:
         json.dump(keys, f, indent=2, default=str)
 
+
+# --------------------------------------------------------------------------- #
+# Admin key (unchanged – always file/env based)
+# --------------------------------------------------------------------------- #
 
 def get_admin_key() -> str:
     """Return the admin key from env, or generate and persist one on first run."""
@@ -68,24 +77,64 @@ def is_admin_key(key: str) -> bool:
     return secrets.compare_digest(key, get_admin_key())
 
 
+# --------------------------------------------------------------------------- #
+# PostgreSQL helpers
+# --------------------------------------------------------------------------- #
+
+def _pg_row_to_record(row: tuple, cur) -> dict[str, Any]:
+    """Convert a DB row to the same dict shape the JSON backend uses."""
+    cols = [desc[0] for desc in cur.description]
+    d = dict(zip(cols, row))
+    # Normalise types to match JSON backend expectations
+    if d.get("created_at"):
+        d["created_at"] = d["created_at"].isoformat()
+    if d.get("last_used"):
+        d["last_used"] = d["last_used"].isoformat()
+    if d.get("calls_today_date"):
+        d["calls_today_date"] = str(d["calls_today_date"])
+    return d
+
+
+# --------------------------------------------------------------------------- #
+# Public API
+# --------------------------------------------------------------------------- #
+
 def create_api_key(email: str, tier: str = "free") -> dict[str, Any]:
     """Create a new API key for a user."""
     if tier not in TIERS:
         raise ValueError(f"Invalid tier: {tier}. Must be one of: {list(TIERS.keys())}")
 
-    keys = _load_keys()
     api_key = _generate_key()
+    now = datetime.now(timezone.utc)
 
-    now = datetime.now(timezone.utc).isoformat()
+    if is_pg_enabled():
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO api_keys
+                        (api_key, email, tier, created_at, calls_today_date, calls_this_month_period)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    RETURNING *
+                    """,
+                    (api_key, email, tier, now, now.strftime("%Y-%m-%d"), now.strftime("%Y-%m")),
+                )
+                row = cur.fetchone()
+                record = _pg_row_to_record(row, cur)
+        logger.info("Created API key for %s (tier=%s) [pg]", email, tier)
+        return {"api_key": api_key, **{k: v for k, v in record.items() if k != "api_key"}}
+
+    # JSON fallback
+    keys = _load_keys()
     record = {
         "email": email,
         "tier": tier,
-        "created_at": now,
+        "created_at": now.isoformat(),
         "last_used": None,
         "calls_today": 0,
-        "calls_today_date": now[:10],
+        "calls_today_date": now.strftime("%Y-%m-%d"),
         "calls_this_month": 0,
-        "calls_this_month_period": now[:7],
+        "calls_this_month_period": now.strftime("%Y-%m"),
         "active": True,
     }
     keys[api_key] = record
@@ -96,6 +145,15 @@ def create_api_key(email: str, tier: str = "free") -> dict[str, Any]:
 
 def validate_api_key(api_key: str) -> dict[str, Any] | None:
     """Validate an API key and return its record, or None if invalid."""
+    if is_pg_enabled():
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM api_keys WHERE api_key = %s AND active = TRUE", (api_key,))
+                row = cur.fetchone()
+                if row is None:
+                    return None
+                return _pg_row_to_record(row, cur)
+
     keys = _load_keys()
     record = keys.get(api_key)
     if record is None or not record.get("active", True):
@@ -105,14 +163,48 @@ def validate_api_key(api_key: str) -> dict[str, Any] | None:
 
 def get_key_info(api_key: str) -> dict[str, Any] | None:
     """Get full info for an API key, resetting counters if date rolled over."""
+    now = datetime.now(timezone.utc)
+    today = now.strftime("%Y-%m-%d")
+    this_month = now.strftime("%Y-%m")
+
+    if is_pg_enabled():
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM api_keys WHERE api_key = %s", (api_key,))
+                row = cur.fetchone()
+                if row is None:
+                    return None
+                record = _pg_row_to_record(row, cur)
+
+                changed = False
+                updates: dict[str, Any] = {}
+
+                if str(record.get("calls_today_date")) != today:
+                    updates["calls_today"] = 0
+                    updates["calls_today_date"] = today
+                    changed = True
+
+                if record.get("calls_this_month_period") != this_month:
+                    updates["calls_this_month"] = 0
+                    updates["calls_this_month_period"] = this_month
+                    changed = True
+
+                if changed:
+                    set_clauses = ", ".join(f"{k} = %s" for k in updates)
+                    cur.execute(
+                        f"UPDATE api_keys SET {set_clauses} WHERE api_key = %s",
+                        (*updates.values(), api_key),
+                    )
+                    record.update(updates)
+
+                return record
+
+    # JSON fallback
     keys = _load_keys()
     record = keys.get(api_key)
     if record is None:
         return None
 
-    now = datetime.now(timezone.utc)
-    today = now.strftime("%Y-%m-%d")
-    this_month = now.strftime("%Y-%m")
     changed = False
 
     if record.get("calls_today_date") != today:
@@ -154,14 +246,33 @@ def check_rate_limit(api_key: str) -> tuple[bool, dict[str, Any]]:
 
 def increment_usage(api_key: str) -> None:
     """Increment the usage counters for an API key."""
+    now = datetime.now(timezone.utc)
+    today = now.strftime("%Y-%m-%d")
+    this_month = now.strftime("%Y-%m")
+
+    if is_pg_enabled():
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                # Reset day/month counters if rolled over, then increment
+                cur.execute(
+                    """
+                    UPDATE api_keys
+                    SET calls_today = CASE WHEN calls_today_date = %s THEN calls_today + 1 ELSE 1 END,
+                        calls_today_date = %s,
+                        calls_this_month = CASE WHEN calls_this_month_period = %s THEN calls_this_month + 1 ELSE 1 END,
+                        calls_this_month_period = %s,
+                        last_used = %s
+                    WHERE api_key = %s
+                    """,
+                    (today, today, this_month, this_month, now, api_key),
+                )
+        return
+
+    # JSON fallback
     keys = _load_keys()
     record = keys.get(api_key)
     if record is None:
         return
-
-    now = datetime.now(timezone.utc)
-    today = now.strftime("%Y-%m-%d")
-    this_month = now.strftime("%Y-%m")
 
     if record.get("calls_today_date") != today:
         record["calls_today"] = 0

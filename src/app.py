@@ -28,6 +28,7 @@ from .auth import (
     validate_api_key,
     get_admin_key,
 )
+from .db import init_db
 from .pricing import TIERS, get_tier, is_tool_allowed
 from .tools_registry import get_tool, list_tools, register_builtins
 from .usage import get_usage_stats, get_global_stats, log_call
@@ -45,6 +46,7 @@ logging.basicConfig(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    init_db()
     register_builtins()
     admin_key = get_admin_key()
     logger.info("MCP Cloud started - %d tools registered", len(list_tools()))

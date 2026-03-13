@@ -49,6 +49,16 @@ FREE_TIER_TOOLS = {
     "csv_to_json",
     "json_to_csv",
     "api_health_check",
+    "current_time",
+    "uuid_generate",
+    "hash_text",
+    "text_summarize",
+    "math_calculate",
+    "url_encode_decode",
+    "regex_test",
+    "json_validate",
+    "dns_lookup",
+    "compound_interest",
 }
 
 
