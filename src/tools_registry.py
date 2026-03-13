@@ -106,45 +106,50 @@ def _cache_set(key: str, value: Any) -> None:
 
 # -- Crypto tools -----------------------------------------------------------
 
-_SYMBOL_MAP = {
-    "bitcoin": "BTC", "btc": "BTC",
-    "ethereum": "ETH", "eth": "ETH",
-    "solana": "SOL", "sol": "SOL",
-    "dogecoin": "DOGE", "doge": "DOGE",
-    "cardano": "ADA", "ada": "ADA",
-    "ripple": "XRP", "xrp": "XRP",
-    "polkadot": "DOT", "dot": "DOT",
-    "avalanche": "AVAX", "avax": "AVAX",
-    "chainlink": "LINK", "link": "LINK",
-    "polygon": "MATIC", "matic": "MATIC",
-    "uniswap": "UNI", "uni": "UNI",
-    "litecoin": "LTC", "ltc": "LTC",
-    "tron": "TRX", "trx": "TRX",
-    "binancecoin": "BNB", "bnb": "BNB",
-    "shiba-inu": "SHIB", "shib": "SHIB",
+_COINPAPRIKA_MAP = {
+    "bitcoin": "btc-bitcoin", "btc": "btc-bitcoin",
+    "ethereum": "eth-ethereum", "eth": "eth-ethereum",
+    "solana": "sol-solana", "sol": "sol-solana",
+    "dogecoin": "doge-dogecoin", "doge": "doge-dogecoin",
+    "cardano": "ada-cardano", "ada": "ada-cardano",
+    "ripple": "xrp-xrp", "xrp": "xrp-xrp",
+    "polkadot": "dot-polkadot", "dot": "dot-polkadot",
+    "avalanche": "avax-avalanche", "avax": "avax-avalanche",
+    "chainlink": "link-chainlink", "link": "link-chainlink",
+    "polygon": "matic-polygon", "matic": "matic-polygon",
+    "uniswap": "uni-uniswap", "uni": "uni-uniswap",
+    "litecoin": "ltc-litecoin", "ltc": "ltc-litecoin",
+    "tron": "trx-tron", "trx": "trx-tron",
+    "binancecoin": "bnb-binance-coin", "bnb": "bnb-binance-coin",
+    "shiba-inu": "shib-shiba-inu", "shib": "shib-shiba-inu",
 }
 
 
-async def _fetch_price_cryptocompare(symbol: str, currency: str) -> dict | None:
-    """Fallback price source using CryptoCompare API (no key needed)."""
+async def _fetch_price_coinpaprika(symbol: str, currency: str) -> dict | None:
+    """Fallback price source using CoinPaprika API (generous limits, no key)."""
     client = await _get_http_client()
-    fsym = _SYMBOL_MAP.get(symbol.lower(), symbol.upper())
+    coin_id = _COINPAPRIKA_MAP.get(symbol.lower())
+    if not coin_id:
+        return None
     try:
-        resp = await client.get(
-            "https://min-api.cryptocompare.com/data/price",
-            params={"fsym": fsym, "tsyms": currency.upper()},
-        )
+        resp = await client.get(f"https://api.coinpaprika.com/v1/tickers/{coin_id}")
         if resp.status_code != 200:
             return None
         data = resp.json()
-        price = data.get(currency.upper())
+        quotes = data.get("quotes", {}).get("USD", {})
+        price = quotes.get("price")
         if price is None:
             return None
         return {
             "symbol": symbol,
             "currency": currency,
-            "price": price,
-            "source": "cryptocompare",
+            "price": round(price, 2),
+            "source": "coinpaprika",
+            "name": data.get("name"),
+            "rank": data.get("rank"),
+            "change_24h": quotes.get("percent_change_24h"),
+            "market_cap": quotes.get("market_cap"),
+            "volume_24h": quotes.get("volume_24h"),
         }
     except Exception:
         return None
@@ -175,8 +180,8 @@ async def crypto_price(symbol: str, currency: str = "usd") -> dict:
             return result
     except Exception:
         pass
-    # Fallback to CryptoCompare
-    result = await _fetch_price_cryptocompare(symbol, currency)
+    # Fallback to CoinPaprika
+    result = await _fetch_price_coinpaprika(symbol, currency)
     if result:
         _cache_set(cache_key, result)
         return result
