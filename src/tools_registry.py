@@ -106,6 +106,50 @@ def _cache_set(key: str, value: Any) -> None:
 
 # -- Crypto tools -----------------------------------------------------------
 
+_COINCAP_MAP = {
+    "bitcoin": "bitcoin", "btc": "bitcoin",
+    "ethereum": "ethereum", "eth": "ethereum",
+    "solana": "solana", "sol": "solana",
+    "dogecoin": "dogecoin", "doge": "dogecoin",
+    "cardano": "cardano", "ada": "cardano",
+    "ripple": "xrp", "xrp": "xrp",
+    "polkadot": "polkadot", "dot": "polkadot",
+    "avalanche": "avalanche", "avax": "avalanche",
+    "chainlink": "chainlink", "link": "chainlink",
+    "polygon": "matic-network", "matic": "matic-network",
+    "uniswap": "uniswap", "uni": "uniswap",
+    "litecoin": "litecoin", "ltc": "litecoin",
+    "tron": "tron", "trx": "tron",
+    "shiba-inu": "shiba-inu", "shib": "shiba-inu",
+    "binancecoin": "binance-coin", "bnb": "binance-coin",
+}
+
+
+async def _fetch_price_coincap(symbol: str, currency: str) -> dict | None:
+    """Fallback price source using CoinCap API."""
+    client = await _get_http_client()
+    coin_id = _COINCAP_MAP.get(symbol.lower())
+    if not coin_id:
+        return None
+    try:
+        resp = await client.get(f"https://api.coincap.io/v2/assets/{coin_id}")
+        if resp.status_code != 200:
+            return None
+        data = resp.json().get("data", {})
+        price_usd = float(data.get("priceUsd", 0))
+        return {
+            "symbol": symbol,
+            "currency": currency,
+            "price": round(price_usd, 2),
+            "source": "coincap",
+            "name": data.get("name"),
+            "change_24h": data.get("changePercent24Hr"),
+            "market_cap_usd": data.get("marketCapUsd"),
+        }
+    except Exception:
+        return None
+
+
 async def crypto_price(symbol: str, currency: str = "usd") -> dict:
     """Get current price for a cryptocurrency."""
     cache_key = f"crypto_price:{symbol.lower()}:{currency.lower()}"
@@ -113,20 +157,30 @@ async def crypto_price(symbol: str, currency: str = "usd") -> dict:
     if cached is not None:
         return cached
     client = await _get_http_client()
-    url = "https://api.coingecko.com/api/v3/simple/price"
-    params = {"ids": symbol.lower(), "vs_currencies": currency.lower()}
-    resp = await client.get(url, params=params)
-    resp.raise_for_status()
-    data = resp.json()
-    if symbol.lower() not in data:
-        return {"error": f"Unknown symbol: {symbol}"}
-    result = {
-        "symbol": symbol,
-        "currency": currency,
-        "price": data[symbol.lower()][currency.lower()],
-    }
-    _cache_set(cache_key, result)
-    return result
+    # Try CoinGecko first
+    try:
+        url = "https://api.coingecko.com/api/v3/simple/price"
+        params = {"ids": symbol.lower(), "vs_currencies": currency.lower()}
+        resp = await client.get(url, params=params)
+        resp.raise_for_status()
+        data = resp.json()
+        if symbol.lower() in data:
+            result = {
+                "symbol": symbol,
+                "currency": currency,
+                "price": data[symbol.lower()][currency.lower()],
+                "source": "coingecko",
+            }
+            _cache_set(cache_key, result)
+            return result
+    except Exception:
+        pass
+    # Fallback to CoinCap
+    result = await _fetch_price_coincap(symbol, currency)
+    if result:
+        _cache_set(cache_key, result)
+        return result
+    return {"error": f"Unknown symbol: {symbol}"}
 
 
 async def crypto_prices_batch(symbols: list[str], currency: str = "usd") -> dict:
