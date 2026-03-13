@@ -106,45 +106,45 @@ def _cache_set(key: str, value: Any) -> None:
 
 # -- Crypto tools -----------------------------------------------------------
 
-_COINCAP_MAP = {
-    "bitcoin": "bitcoin", "btc": "bitcoin",
-    "ethereum": "ethereum", "eth": "ethereum",
-    "solana": "solana", "sol": "solana",
-    "dogecoin": "dogecoin", "doge": "dogecoin",
-    "cardano": "cardano", "ada": "cardano",
-    "ripple": "xrp", "xrp": "xrp",
-    "polkadot": "polkadot", "dot": "polkadot",
-    "avalanche": "avalanche", "avax": "avalanche",
-    "chainlink": "chainlink", "link": "chainlink",
-    "polygon": "matic-network", "matic": "matic-network",
-    "uniswap": "uniswap", "uni": "uniswap",
-    "litecoin": "litecoin", "ltc": "litecoin",
-    "tron": "tron", "trx": "tron",
-    "shiba-inu": "shiba-inu", "shib": "shiba-inu",
-    "binancecoin": "binance-coin", "bnb": "binance-coin",
+_SYMBOL_MAP = {
+    "bitcoin": "BTC", "btc": "BTC",
+    "ethereum": "ETH", "eth": "ETH",
+    "solana": "SOL", "sol": "SOL",
+    "dogecoin": "DOGE", "doge": "DOGE",
+    "cardano": "ADA", "ada": "ADA",
+    "ripple": "XRP", "xrp": "XRP",
+    "polkadot": "DOT", "dot": "DOT",
+    "avalanche": "AVAX", "avax": "AVAX",
+    "chainlink": "LINK", "link": "LINK",
+    "polygon": "MATIC", "matic": "MATIC",
+    "uniswap": "UNI", "uni": "UNI",
+    "litecoin": "LTC", "ltc": "LTC",
+    "tron": "TRX", "trx": "TRX",
+    "binancecoin": "BNB", "bnb": "BNB",
+    "shiba-inu": "SHIB", "shib": "SHIB",
 }
 
 
-async def _fetch_price_coincap(symbol: str, currency: str) -> dict | None:
-    """Fallback price source using CoinCap API."""
+async def _fetch_price_cryptocompare(symbol: str, currency: str) -> dict | None:
+    """Fallback price source using CryptoCompare API (no key needed)."""
     client = await _get_http_client()
-    coin_id = _COINCAP_MAP.get(symbol.lower())
-    if not coin_id:
-        return None
+    fsym = _SYMBOL_MAP.get(symbol.lower(), symbol.upper())
     try:
-        resp = await client.get(f"https://api.coincap.io/v2/assets/{coin_id}")
+        resp = await client.get(
+            "https://min-api.cryptocompare.com/data/price",
+            params={"fsym": fsym, "tsyms": currency.upper()},
+        )
         if resp.status_code != 200:
             return None
-        data = resp.json().get("data", {})
-        price_usd = float(data.get("priceUsd", 0))
+        data = resp.json()
+        price = data.get(currency.upper())
+        if price is None:
+            return None
         return {
             "symbol": symbol,
             "currency": currency,
-            "price": round(price_usd, 2),
-            "source": "coincap",
-            "name": data.get("name"),
-            "change_24h": data.get("changePercent24Hr"),
-            "market_cap_usd": data.get("marketCapUsd"),
+            "price": price,
+            "source": "cryptocompare",
         }
     except Exception:
         return None
@@ -175,8 +175,8 @@ async def crypto_price(symbol: str, currency: str = "usd") -> dict:
             return result
     except Exception:
         pass
-    # Fallback to CoinCap
-    result = await _fetch_price_coincap(symbol, currency)
+    # Fallback to CryptoCompare
+    result = await _fetch_price_cryptocompare(symbol, currency)
     if result:
         _cache_set(cache_key, result)
         return result
