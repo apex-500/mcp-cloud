@@ -904,7 +904,7 @@ async def defi_yields(chain: str | None = None, min_tvl: float = 1_000_000, limi
 async def gas_prices(chain: str = "ethereum") -> dict:
     """Get current gas prices for EVM chains using public RPC endpoints."""
     rpc_urls = {
-        "ethereum": "https://eth.llamarpc.com",
+        "ethereum": "https://ethereum-rpc.publicnode.com",
         "polygon": "https://polygon-rpc.com",
         "arbitrum": "https://arb1.arbitrum.io/rpc",
         "optimism": "https://mainnet.optimism.io",

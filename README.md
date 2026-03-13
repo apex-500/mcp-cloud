@@ -70,21 +70,50 @@ curl https://mcp-cloud-2w62.onrender.com/v1/usage \
 | GET    | `/sse`           | SSE stream for MCP clients         |
 | POST   | `/mcp/messages`  | JSON-RPC message endpoint for MCP  |
 
-## Available Tools
+## Available Tools (25)
 
-### Crypto
-- `crypto_price` - Get current cryptocurrency price
-- `crypto_prices_batch` - Get prices for multiple coins
-- `trending_tokens` - Get trending tokens from CoinGecko
+### Crypto (5 tools)
+- `crypto_price` - Get current cryptocurrency price (CoinPaprika + CoinGecko fallback)
+- `crypto_prices_batch` - Get prices for multiple coins at once
+- `trending_tokens` - Get trending tokens
+- `defi_yields` - Top DeFi yields from DeFiLlama (filterable by chain/TVL) **[Pro]**
+- `gas_prices` - Live gas prices for 7 EVM chains **[Pro]**
 
-### Monitoring
+### Web & Search (2 tools)
+- `web_search` - Search the web via DuckDuckGo **[Pro]**
+- `url_fetch` - Fetch and extract clean text from any URL **[Pro]**
+
+### Time & Date (2 tools)
+- `current_time` - Current UTC time + 13 common timezones
+- `timezone_convert` - Convert time between any timezones **[Pro]**
+
+### Text & Data Processing (6 tools)
+- `text_summarize` - Word count, reading time, top word frequency analysis
+- `json_validate` - Validate JSON with optional schema checking
+- `regex_test` - Test regex patterns with full match details
+- `hash_text` - Generate MD5, SHA-1, SHA-256, SHA-512 hashes
+- `url_encode_decode` - URL encode/decode text
+- `uuid_generate` - Generate UUID v4 values
+
+### Math & Finance (3 tools)
+- `math_calculate` - Safe math expression evaluator (supports sqrt, trig, log, pi)
+- `currency_convert` - Live fiat currency conversion (150+ currencies) **[Pro]**
+- `compound_interest` - Calculate compound interest with monthly contributions
+
+### Network (2 tools)
+- `dns_lookup` - DNS record lookup for any hostname
+- `ip_geolocation` - IP address geolocation (country, city, ISP) **[Pro]**
+
+### Monitoring (2 tools)
 - `api_health_check` - Check if an API endpoint is healthy
-- `http_request` - Make an HTTP request
+- `http_request` - Make any HTTP request **[Pro]**
 
-### Conversion
+### Conversion (3 tools)
 - `csv_to_json` - Convert CSV to JSON
 - `json_to_csv` - Convert JSON to CSV
 - `markdown_to_html` - Convert Markdown to HTML
+
+> **[Pro]** = Available on Pro ($29/mo) and Business ($99/mo) tiers. All other tools are free.
 
 ## MCP Client Configuration
 
@@ -135,6 +164,7 @@ The included `railway.toml` handles the rest.
 |-----------------------|------------------------------------|------------------|
 | `ADMIN_KEY`           | Admin API key                      | Auto-generated   |
 | `MCP_CLOUD_DATA_DIR`  | Directory for keys/usage files     | `.` (project root)|
+| `DATABASE_URL`        | PostgreSQL connection URL (recommended for production) | None (uses JSON files) |
 | `PORT`                | Server port                        | `8000`           |
 
 ## Development
