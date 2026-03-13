@@ -945,6 +945,308 @@ async def gas_prices(chain: str = "ethereum") -> dict:
         return {"chain": chain, "error": str(exc)}
 
 
+# -- Screenshot tools -------------------------------------------------------
+
+async def screenshot_url(url: str, width: int = 1280, crop_height: int = 720) -> dict:
+    """Generate a screenshot URL for a website using thum.io free API."""
+    encoded_url = url if url.startswith("http") else f"https://{url}"
+    screenshot_image_url = (
+        f"https://image.thum.io/get/width/{width}/crop/{crop_height}/{encoded_url}"
+    )
+    return {
+        "url": url,
+        "screenshot_url": screenshot_image_url,
+        "width": width,
+        "crop_height": crop_height,
+        "note": "Open or embed the screenshot_url to view the captured image.",
+    }
+
+
+# -- Document fetch tools ---------------------------------------------------
+
+async def document_fetch(url: str, max_length: int = 50000) -> dict:
+    """Fetch a document from a URL and return content with metadata."""
+    client = await _get_http_client()
+    try:
+        resp = await client.get(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; MCPCloud/1.0)"},
+        )
+        resp.raise_for_status()
+        content_type = resp.headers.get("content-type", "")
+        content_length = resp.headers.get("content-length")
+        last_modified = resp.headers.get("last-modified")
+
+        # For binary content types, report metadata only
+        binary_types = ("pdf", "zip", "octet-stream", "image/", "audio/", "video/")
+        is_binary = any(bt in content_type for bt in binary_types)
+
+        if is_binary:
+            raw = resp.content
+            return {
+                "url": url,
+                "content_type": content_type,
+                "size_bytes": len(raw),
+                "last_modified": last_modified,
+                "text": None,
+                "note": "Binary document detected. Content metadata returned; text extraction requires specialised libraries.",
+            }
+
+        text = resp.text
+        if "html" in content_type:
+            text = re.sub(r"<script[^>]*>.*?</script>", "", text, flags=re.DOTALL | re.IGNORECASE)
+            text = re.sub(r"<style[^>]*>.*?</style>", "", text, flags=re.DOTALL | re.IGNORECASE)
+            text = re.sub(r"<[^>]+>", " ", text)
+            text = re.sub(r"\s+", " ", text).strip()
+
+        truncated = len(text) > max_length
+        text = text[:max_length]
+        return {
+            "url": url,
+            "content_type": content_type,
+            "size_bytes": int(content_length) if content_length else len(text),
+            "last_modified": last_modified,
+            "text": text,
+            "length": len(text),
+            "truncated": truncated,
+        }
+    except Exception as exc:
+        return {"url": url, "error": str(exc)}
+
+
+# -- Translation tools ------------------------------------------------------
+
+async def translate_text(
+    text: str, source_lang: str = "en", target_lang: str = "ko"
+) -> dict:
+    """Translate text using MyMemory free translation API (5000 chars/day)."""
+    cache_key = f"translate:{hashlib.md5((text + source_lang + target_lang).encode()).hexdigest()}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+    client = await _get_http_client()
+    try:
+        langpair = f"{source_lang}|{target_lang}"
+        resp = await client.get(
+            "https://api.mymemory.translated.net/get",
+            params={"q": text[:5000], "langpair": langpair},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        response_data = data.get("responseData", {})
+        translated = response_data.get("translatedText", "")
+        match_quality = response_data.get("match")
+        result = {
+            "source_text": text[:5000],
+            "translated_text": translated,
+            "source_lang": source_lang,
+            "target_lang": target_lang,
+            "match_quality": match_quality,
+        }
+        _cache_set(cache_key, result)
+        return result
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+# -- Weather tools ----------------------------------------------------------
+
+_WEATHER_CACHE_TTL = 300  # 5 minutes for weather data
+
+
+async def weather(location: str, units: str = "metric") -> dict:
+    """Get current weather using wttr.in free API (no key required)."""
+    cache_key = f"weather:{location.lower()}:{units}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+    client = await _get_http_client()
+    try:
+        encoded_location = urllib.parse.quote(location)
+        resp = await client.get(
+            f"https://wttr.in/{encoded_location}?format=j1",
+            headers={"User-Agent": "Mozilla/5.0 (compatible; MCPCloud/1.0)"},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        current = data.get("current_condition", [{}])[0]
+        area = data.get("nearest_area", [{}])[0]
+
+        area_name = area.get("areaName", [{}])[0].get("value", location)
+        country = area.get("country", [{}])[0].get("value", "")
+        region = area.get("region", [{}])[0].get("value", "")
+
+        if units == "imperial":
+            temp = current.get("temp_F", "")
+            feels_like = current.get("FeelsLikeF", "")
+            temp_unit = "F"
+        else:
+            temp = current.get("temp_C", "")
+            feels_like = current.get("FeelsLikeC", "")
+            temp_unit = "C"
+
+        weather_desc = current.get("weatherDesc", [{}])[0].get("value", "")
+        result = {
+            "location": area_name,
+            "country": country,
+            "region": region,
+            "temperature": f"{temp}°{temp_unit}",
+            "feels_like": f"{feels_like}°{temp_unit}",
+            "description": weather_desc,
+            "humidity": f"{current.get('humidity', '')}%",
+            "wind_speed_kmph": current.get("windspeedKmph"),
+            "wind_direction": current.get("winddir16Point"),
+            "visibility_km": current.get("visibility"),
+            "pressure_mb": current.get("pressure"),
+            "uv_index": current.get("uvIndex"),
+            "observation_time": current.get("observation_time"),
+        }
+        # Use longer TTL for weather
+        _cache[cache_key] = (time.monotonic() + _WEATHER_CACHE_TTL, result)
+        return result
+    except Exception as exc:
+        return {"location": location, "error": str(exc)}
+
+
+# -- QR code tools ----------------------------------------------------------
+
+async def qr_generate(data: str, size: int = 300) -> dict:
+    """Generate a QR code image URL using goqr.me free API."""
+    encoded_data = urllib.parse.quote(data)
+    qr_url = (
+        f"https://api.qrserver.com/v1/create-qr-code/"
+        f"?size={size}x{size}&data={encoded_data}"
+    )
+    return {
+        "data": data,
+        "qr_image_url": qr_url,
+        "size": f"{size}x{size}",
+        "note": "Open or embed the qr_image_url to view the QR code.",
+    }
+
+
+# -- URL shortener tools ----------------------------------------------------
+
+async def shorten_url(url: str) -> dict:
+    """Shorten a URL using cleanuri.com free API (no key required)."""
+    client = await _get_http_client()
+    try:
+        resp = await client.post(
+            "https://cleanuri.com/api/v1/shorten",
+            json={"url": url},
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        short_url = data.get("result_url", "")
+        return {
+            "original_url": url,
+            "short_url": short_url,
+        }
+    except Exception as exc:
+        return {"original_url": url, "error": str(exc)}
+
+
+# -- WHOIS/RDAP tools ------------------------------------------------------
+
+async def whois_domain(domain: str) -> dict:
+    """Get domain registration info using RDAP (successor to WHOIS, free)."""
+    cache_key = f"whois:{domain.lower()}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+    client = await _get_http_client()
+    try:
+        resp = await client.get(f"https://rdap.org/domain/{domain.lower()}")
+        resp.raise_for_status()
+        data = resp.json()
+
+        # Extract useful fields from RDAP response
+        name = data.get("ldhName") or data.get("handle") or domain
+        status = data.get("status", [])
+
+        # Extract events (registration, expiration, last changed)
+        events = {}
+        for event in data.get("events", []):
+            action = event.get("eventAction", "")
+            date = event.get("eventDate", "")
+            if action and date:
+                events[action] = date
+
+        # Extract nameservers
+        nameservers = []
+        for ns in data.get("nameservers", []):
+            ns_name = ns.get("ldhName")
+            if ns_name:
+                nameservers.append(ns_name)
+
+        # Extract registrar from entities
+        registrar = None
+        for entity in data.get("entities", []):
+            roles = entity.get("roles", [])
+            if "registrar" in roles:
+                vcard = entity.get("vcardArray", [None, []])[1] if entity.get("vcardArray") else []
+                for entry in vcard:
+                    if isinstance(entry, list) and len(entry) >= 4 and entry[0] == "fn":
+                        registrar = entry[3]
+                        break
+
+        result = {
+            "domain": name,
+            "status": status,
+            "registered": events.get("registration"),
+            "expires": events.get("expiration"),
+            "last_changed": events.get("last changed"),
+            "nameservers": nameservers,
+            "registrar": registrar,
+        }
+        _cache_set(cache_key, result)
+        return result
+    except Exception as exc:
+        return {"domain": domain, "error": str(exc)}
+
+
+# -- Stock price tools ------------------------------------------------------
+
+async def stock_price(symbol: str) -> dict:
+    """Get current stock price using Alpha Vantage demo API."""
+    cache_key = f"stock:{symbol.upper()}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        return cached
+    client = await _get_http_client()
+    try:
+        resp = await client.get(
+            "https://www.alphavantage.co/query",
+            params={
+                "function": "GLOBAL_QUOTE",
+                "symbol": symbol.upper(),
+                "apikey": "demo",
+            },
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        quote = data.get("Global Quote", {})
+        if not quote:
+            return {"symbol": symbol.upper(), "error": "No data returned. The demo API key has limited symbol support."}
+        result = {
+            "symbol": quote.get("01. symbol", symbol.upper()),
+            "price": quote.get("05. price"),
+            "open": quote.get("02. open"),
+            "high": quote.get("03. high"),
+            "low": quote.get("04. low"),
+            "volume": quote.get("06. volume"),
+            "latest_trading_day": quote.get("07. latest trading day"),
+            "previous_close": quote.get("08. previous close"),
+            "change": quote.get("09. change"),
+            "change_percent": quote.get("10. change percent"),
+            "source": "alphavantage",
+        }
+        _cache_set(cache_key, result)
+        return result
+    except Exception as exc:
+        return {"symbol": symbol.upper(), "error": str(exc)}
+
+
 # ---------------------------------------------------------------------------
 # Register all built-in tools
 # ---------------------------------------------------------------------------
@@ -1363,6 +1665,149 @@ def register_builtins() -> None:
         handler=gas_prices,
         category="crypto",
         tags=["gas", "evm", "transaction"],
+    )
+
+    # -- Screenshot tools ---
+
+    register_tool(
+        name="screenshot_url",
+        description="Generate a screenshot image URL for any website using thum.io (returns URL, no download)",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "Website URL to screenshot (e.g. https://example.com)"},
+                "width": {"type": "integer", "default": 1280, "description": "Screenshot width in pixels"},
+                "crop_height": {"type": "integer", "default": 720, "description": "Crop height in pixels"},
+            },
+            "required": ["url"],
+        },
+        handler=screenshot_url,
+        category="web",
+        tags=["screenshot", "image", "web"],
+    )
+
+    # -- Document fetch tools ---
+
+    register_tool(
+        name="document_fetch",
+        description="Fetch any document URL and return its content and metadata (HTML, text, JSON; reports metadata for binary files)",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "Document URL to fetch"},
+                "max_length": {"type": "integer", "default": 50000, "description": "Max characters to return for text content"},
+            },
+            "required": ["url"],
+        },
+        handler=document_fetch,
+        category="web",
+        tags=["document", "fetch", "pdf"],
+    )
+
+    # -- Translation tools ---
+
+    register_tool(
+        name="translate_text",
+        description="Translate text between languages using MyMemory API (free, 5000 chars/day). Supports 50+ language pairs.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "Text to translate (max 5000 characters)"},
+                "source_lang": {"type": "string", "default": "en", "description": "Source language code (e.g. en, fr, de, ja, ko, zh)"},
+                "target_lang": {"type": "string", "default": "ko", "description": "Target language code (e.g. ko, en, es, de, ja, zh)"},
+            },
+            "required": ["text"],
+        },
+        handler=translate_text,
+        category="text",
+        tags=["translate", "language", "i18n"],
+    )
+
+    # -- Weather tools ---
+
+    register_tool(
+        name="weather",
+        description="Get current weather for any location worldwide using wttr.in (no API key needed)",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "location": {"type": "string", "description": "Location name (e.g. 'Seoul', 'New York', 'London')"},
+                "units": {"type": "string", "default": "metric", "enum": ["metric", "imperial"], "description": "Temperature units"},
+            },
+            "required": ["location"],
+        },
+        handler=weather,
+        category="web",
+        tags=["weather", "location", "forecast"],
+    )
+
+    # -- QR code tools ---
+
+    register_tool(
+        name="qr_generate",
+        description="Generate a QR code image URL for any text or URL (returns image URL, no download)",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "data": {"type": "string", "description": "Text or URL to encode in the QR code"},
+                "size": {"type": "integer", "default": 300, "description": "QR code image size in pixels (width and height)"},
+            },
+            "required": ["data"],
+        },
+        handler=qr_generate,
+        category="web",
+        tags=["qr", "generate", "image"],
+    )
+
+    # -- URL shortener tools ---
+
+    register_tool(
+        name="shorten_url",
+        description="Shorten a long URL using cleanuri.com (free, no API key required)",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "URL to shorten (must start with http:// or https://)"},
+            },
+            "required": ["url"],
+        },
+        handler=shorten_url,
+        category="web",
+        tags=["url", "shorten", "link"],
+    )
+
+    # -- WHOIS/RDAP tools ---
+
+    register_tool(
+        name="whois_domain",
+        description="Get domain registration info (registrar, status, dates, nameservers) using RDAP, the successor to WHOIS",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "domain": {"type": "string", "description": "Domain name to look up (e.g. example.com)"},
+            },
+            "required": ["domain"],
+        },
+        handler=whois_domain,
+        category="network",
+        tags=["whois", "domain", "rdap"],
+    )
+
+    # -- Stock price tools ---
+
+    register_tool(
+        name="stock_price",
+        description="Get current stock price and daily stats using Alpha Vantage (demo key, limited symbols)",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "symbol": {"type": "string", "description": "Stock ticker symbol (e.g. AAPL, MSFT, GOOGL, IBM)"},
+            },
+            "required": ["symbol"],
+        },
+        handler=stock_price,
+        category="finance",
+        tags=["stock", "price", "market"],
     )
 
     logger.info("Registered %d built-in tools", len(_registry))

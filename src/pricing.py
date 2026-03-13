@@ -59,6 +59,9 @@ FREE_TIER_TOOLS = {
     "json_validate",
     "dns_lookup",
     "compound_interest",
+    "weather",
+    "qr_generate",
+    "translate_text",
 }
 
 
