@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mcp-cloud"
+version = "0.1.0"
+description = "Hosted MCP server platform with API key auth, usage tracking, and billing"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.27.0",
+    "httpx>=0.27.0",
+    "python-dotenv>=1.0.0",
+    "mcp>=1.0.0",
+    "sse-starlette>=2.0.0",
+]
+
+[project.scripts]
+mcp-cloud = "src.app:start"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
